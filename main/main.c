@@ -13,6 +13,10 @@
 #define MCLK_GPIO       (0)
 #define MCLK_FREQ_HZ    (12288000) // 256 × 48kHz
 
+// Constants for signal level calculation
+#define MAX_24BIT       (8388607)    // Maximum 24-bit value
+#define SIGNAL_THRESHOLD (MAX_24BIT / 100)  // 1% of max value
+
 static const char *TAG = "PCM1808_APP";
 
 void init_mclk_output()
@@ -79,6 +83,7 @@ void app_main(void)
     int32_t max_value = 0;
     int32_t min_value = 0;
     int64_t sum = 0;
+    int32_t peak_value = 0;
 
     while (1) {
         esp_err_t res = i2s_read(I2S_NUM, &i2s_read_buff, sizeof(i2s_read_buff), &bytes_read, portMAX_DELAY);
@@ -99,24 +104,45 @@ void app_main(void)
                 if (sample > max_value) max_value = sample;
                 if (sample < min_value) min_value = sample;
                 sum += abs(sample);
+                
+                // Update peak value
+                if (abs(sample) > peak_value) {
+                    peak_value = abs(sample);
+                }
             }
 
             // Calculate average
             int32_t avg = sum / samples;
+            
+            // Calculate signal level as percentage of max 24-bit value
+            float signal_level = (float)peak_value / MAX_24BIT * 100.0f;
 
-            // Print statistics every 10 batches
+            // Print statistics every 1000 batches
             if (++sample_count % 1000 == 0) {
-                ESP_LOGI(TAG, "Sample Statistics:");
-                ESP_LOGI(TAG, "  Max: %ld", max_value);
-                ESP_LOGI(TAG, "  Min: %ld", min_value);
-                ESP_LOGI(TAG, "  Avg: %ld", avg);
-                ESP_LOGI(TAG, "  Samples in batch: %d", samples);
+                ESP_LOGI(TAG, "=== Audio Signal Analysis ===");
+                ESP_LOGI(TAG, "Signal Level: %.2f%% of max", signal_level);
+                ESP_LOGI(TAG, "Peak Value: %ld (%.2f%% of max)", peak_value, (float)peak_value/MAX_24BIT * 100.0f);
+                ESP_LOGI(TAG, "Max: %ld", max_value);
+                ESP_LOGI(TAG, "Min: %ld", min_value);
+                ESP_LOGI(TAG, "Avg: %ld", avg);
+                
+                // Print signal level indicator
+                int bars = (int)(signal_level / 5); // 20 bars max
+                char level_bar[21] = {0};
+                for (int i = 0; i < bars && i < 20; i++) {
+                    level_bar[i] = '|';
+                }
+                ESP_LOGI(TAG, "Level: [%-20s]", level_bar);
                 
                 // Print first few samples for debugging
-                ESP_LOGI(TAG, "First 5 samples:");
+                ESP_LOGI(TAG, "First 5 samples (raw values):");
                 for (int i = 0; i < 5 && i < samples; i++) {
-                    ESP_LOGI(TAG, "  Sample[%d]: %ld", i, i2s_read_buff[i] >> 8);
+                    ESP_LOGI(TAG, "  Sample[%d]: %ld (%.2f%%)", 
+                            i, 
+                            i2s_read_buff[i] >> 8,
+                            (float)(i2s_read_buff[i] >> 8) / MAX_24BIT * 100.0f);
                 }
+                ESP_LOGI(TAG, "===========================");
             }
         }
     }
