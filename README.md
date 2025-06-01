@@ -1,35 +1,87 @@
-| Supported Targets | ESP32 | ESP32-C2 | ESP32-C3 | ESP32-C6 | ESP32-H2 | ESP32-P4 | ESP32-S2 | ESP32-S3 |
-| ----------------- | ----- | -------- | -------- | -------- | -------- | -------- | -------- | -------- |
+# ESP32 PCM1808 ADC Interface
 
-# _Sample project_
+This project demonstrates how to interface the PCM1808 24-bit ADC with an ESP32 microcontroller. The PCM1808 is a high-quality audio ADC that can be used for various audio applications.
 
-(See the README.md file in the upper level 'examples' directory for more information about examples.)
+## Hardware Setup
 
-This is the simplest buildable example. The example is used by command `idf.py create-project`
-that copies the project to user specified path and set it's name. For more information follow the [docs page](https://docs.espressif.com/projects/esp-idf/en/latest/api-guides/build-system.html#start-a-new-project)
+### Required Components
+- ESP32 Development Board
+- PCM1808 ADC Module
+- Audio Input Source (microphone, line-in, etc.)
+- Jumper Wires
 
-
-
-## How to use example
-We encourage the users to use the example as a template for the new projects.
-A recommended way is to follow the instructions on a [docs page](https://docs.espressif.com/projects/esp-idf/en/latest/api-guides/build-system.html#start-a-new-project).
-
-## Example folder contents
-
-The project **sample_project** contains one source file in C language [main.c](main/main.c). The file is located in folder [main](main).
-
-ESP-IDF projects are built using CMake. The project build configuration is contained in `CMakeLists.txt`
-files that provide set of directives and instructions describing the project's source files and targets
-(executable, library, or both). 
-
-Below is short explanation of remaining files in the project folder.
-
+### Connections
 ```
-├── CMakeLists.txt
-├── main
-│   ├── CMakeLists.txt
-│   └── main.c
-└── README.md                  This is the file you are currently reading
+ESP32    ->   PCM1808
+GPIO0    ->   MCLK    (Master Clock)
+GPIO5    ->   BCK     (Bit Clock)
+GPIO7    ->   WS      (Word Select/LRCLK)
+GPIO6    ->   DOUT    (Data Output)
+3.3V     ->   VCC
+GND      ->   GND
 ```
-Additionally, the sample project contains Makefile and component.mk files, used for the legacy Make based build system. 
-They are not used or needed when building with CMake and idf.py.
+
+## Software Features
+
+### Clock Generation
+- Generates a 12.288 MHz MCLK signal using ESP32's LEDC peripheral
+- This clock is used to drive the PCM1808 ADC
+- The MCLK frequency is set to 256 × 48kHz for optimal performance
+
+### I2S Configuration
+- Configured in I2S master mode
+- Sample rate: 48kHz (PCM1808 default)
+- 32-bit data width (PCM1808 outputs 24-bit data)
+- Mono channel format
+
+### Signal Analysis
+The code provides real-time analysis of the audio signal:
+- Signal level monitoring (as percentage of maximum)
+- Peak value detection
+- Maximum and minimum values
+- Average signal level
+- Visual level meter
+- Raw sample values with percentage of maximum
+
+## Usage
+
+1. Connect the hardware as described above
+2. Flash the code to your ESP32
+3. Monitor the serial output to see the signal analysis
+4. The output will show:
+   - Signal level as percentage of maximum
+   - Peak values
+   - Visual level meter
+   - Raw sample values
+
+## Signal Interpretation
+
+- Signal levels are shown as percentages of the maximum 24-bit value
+- Values typically range from -8,388,608 to 8,388,607
+- A good signal should show:
+  - Both positive and negative values
+  - Varying levels (not constant)
+  - No clipping (not hitting maximum values)
+  - Clean transitions
+
+## Troubleshooting
+
+If you're not getting expected results:
+1. Check all connections
+2. Verify MCLK is present on GPIO0
+3. Ensure audio input is properly connected
+4. Check signal levels in the serial output
+5. Verify power supply is stable
+
+## Future Improvements
+
+Potential enhancements:
+1. Automatic gain control
+2. Frequency analysis
+3. Audio processing features
+4. Data logging capabilities
+5. Web interface for monitoring
+
+## License
+
+This project is open source and available under the MIT License.
