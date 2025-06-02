@@ -30,8 +30,8 @@
 #define TASK_STACK_SIZE 4096         // Increased stack size
 
 // Volume control
-#define DEFAULT_GAIN    1.0f         // Increased default gain
-#define MAX_GAIN        4.0f        // Increased maximum gain
+#define DEFAULT_GAIN    0.5f         // Increased default gain
+#define MAX_GAIN        1.0f        // Increased maximum gain
 #define MIN_GAIN        0.1f         // Minimum gain
 
 static const char *TAG = "PCM1808_APP";
@@ -250,7 +250,7 @@ static void audio_task(void *pvParameters)
             float signal_level = (float)peak_value / MAX_24BIT * 100.0f;
 
             // Print statistics every 1000 batches
-            if (++sample_count % 1000 == 0) {
+            if (++sample_count % 48000 == 0) {
                 ESP_LOGI(TAG, "=== Audio Signal Analysis ===");
                 ESP_LOGI(TAG, "Current Gain: %.1fx", current_gain);
                 ESP_LOGI(TAG, "Signal Level: %.2f%% of max", signal_level);
@@ -271,14 +271,14 @@ static void audio_task(void *pvParameters)
                 ESP_LOGI(TAG, "Level: [%-20s]", level_bar);
                 
                 // Print first few samples for debugging
-                ESP_LOGI(TAG, "First 5 samples (raw values):");
+                /*ESP_LOGI(TAG, "First 5 samples (raw values):");
                 for (int i = 0; i < 5 && i < samples; i++) {
                     ESP_LOGI(TAG, "  Sample[%d]: %ld (%.2f%%)", 
                             i, 
                             i2s_read_buff[i] >> 8,
                             (float)(i2s_read_buff[i] >> 8) / MAX_24BIT * 100.0f);
                 }
-                ESP_LOGI(TAG, "===========================");
+                ESP_LOGI(TAG, "===========================");*/
             }
         }
     }
