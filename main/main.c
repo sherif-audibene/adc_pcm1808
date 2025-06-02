@@ -6,16 +6,22 @@
 #include "esp_log.h"
 #include <math.h>
 
-#define I2S_NUM         (0)
+#define I2S_NUM_ADC     (0)    // I2S number for ADC (PCM1808)
+#define I2S_NUM_DAC     (1)    // I2S number for DAC (PCM5102)
+
+// ADC (PCM1808) pins
 #define I2S_BCK_IO      (5)
 #define I2S_WS_IO       (7)
 #define I2S_DIN_IO      (6)
+#define MCLK_GPIO       (0)
+#define MCLK_FREQ_HZ    (12288000) // 256 × 48kHz
+
+// DAC (PCM5102) pins
 #define I2S_DOUT_IO     (17)  // PCM5102 DIN
 #define I2S_BCK_DAC_IO  (18)  // PCM5102 BCK
 #define I2S_WS_DAC_IO   (16)  // PCM5102 LCK
+
 #define I2S_SAMPLE_RATE (48000) // PCM1808 default FS = 48kHz
-#define MCLK_GPIO       (0)
-#define MCLK_FREQ_HZ    (12288000) // 256 × 48kHz
 
 // Constants for signal level calculation
 #define MAX_24BIT       (8388607)    // Maximum 24-bit value
@@ -24,8 +30,8 @@
 #define TASK_STACK_SIZE 4096         // Increased stack size
 
 // Volume control
-#define DEFAULT_GAIN    8.0f         // Increased default gain
-#define MAX_GAIN        16.0f        // Increased maximum gain
+#define DEFAULT_GAIN    1.0f         // Increased default gain
+#define MAX_GAIN        4.0f        // Increased maximum gain
 #define MIN_GAIN        0.1f         // Minimum gain
 
 static const char *TAG = "PCM1808_APP";
@@ -59,10 +65,10 @@ void init_mclk_output()
 static void init_i2s_adc_input(void)
 {
     i2s_config_t i2s_config = {
-        .mode = I2S_MODE_MASTER | I2S_MODE_RX | I2S_MODE_TX,  // Enable both RX and TX
+        .mode = I2S_MODE_MASTER | I2S_MODE_RX,  // ADC is RX only
         .sample_rate = I2S_SAMPLE_RATE,
         .bits_per_sample = I2S_BITS_PER_SAMPLE_32BIT,
-        .channel_format = I2S_CHANNEL_FMT_ONLY_LEFT,
+        .channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT,  // Changed to stereo
         .communication_format = I2S_COMM_FORMAT_STAND_I2S,
         .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
         .dma_buf_count = 4,           // Reduced buffer count
@@ -76,17 +82,50 @@ static void init_i2s_adc_input(void)
         .mck_io_num = MCLK_GPIO,
         .bck_io_num = I2S_BCK_IO,
         .ws_io_num = I2S_WS_IO,
-        .data_out_num = I2S_DOUT_IO,  // PCM5102 DIN
+        .data_out_num = I2S_PIN_NO_CHANGE,  // ADC doesn't need output
         .data_in_num = I2S_DIN_IO
     };
 
-    ESP_ERROR_CHECK(i2s_driver_install(I2S_NUM, &i2s_config, 0, NULL));
-    ESP_ERROR_CHECK(i2s_set_pin(I2S_NUM, &pin_config));
-    ESP_LOGI(TAG, "I2S driver installed");
+    ESP_ERROR_CHECK(i2s_driver_install(I2S_NUM_ADC, &i2s_config, 0, NULL));
+    ESP_ERROR_CHECK(i2s_set_pin(I2S_NUM_ADC, &pin_config));
+    ESP_LOGI(TAG, "I2S ADC driver installed");
 
     // Set I2S clock
-    i2s_set_clk(I2S_NUM, I2S_SAMPLE_RATE, I2S_BITS_PER_SAMPLE_32BIT, I2S_CHANNEL_MONO);
-    ESP_LOGI(TAG, "I2S clock set to %d Hz", I2S_SAMPLE_RATE);
+    i2s_set_clk(I2S_NUM_ADC, I2S_SAMPLE_RATE, I2S_BITS_PER_SAMPLE_32BIT, I2S_CHANNEL_MONO);
+    ESP_LOGI(TAG, "I2S ADC clock set to %d Hz", I2S_SAMPLE_RATE);
+}
+
+static void init_i2s_dac_output(void)
+{
+    i2s_config_t i2s_config = {
+        .mode = I2S_MODE_MASTER | I2S_MODE_TX,  // DAC is TX only
+        .sample_rate = I2S_SAMPLE_RATE,
+        .bits_per_sample = I2S_BITS_PER_SAMPLE_32BIT,
+        .channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT,  // Changed to stereo
+        .communication_format = I2S_COMM_FORMAT_STAND_I2S,
+        .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
+        .dma_buf_count = 4,
+        .dma_buf_len = BUFFER_SIZE,
+        .use_apll = false,
+        .tx_desc_auto_clear = true,
+        .fixed_mclk = 0  // DAC doesn't need MCLK
+    };
+
+    i2s_pin_config_t pin_config = {
+        .mck_io_num = I2S_PIN_NO_CHANGE,  // DAC doesn't need MCLK
+        .bck_io_num = I2S_BCK_DAC_IO,
+        .ws_io_num = I2S_WS_DAC_IO,
+        .data_out_num = I2S_DOUT_IO,
+        .data_in_num = I2S_PIN_NO_CHANGE  // DAC doesn't need input
+    };
+
+    ESP_ERROR_CHECK(i2s_driver_install(I2S_NUM_DAC, &i2s_config, 0, NULL));
+    ESP_ERROR_CHECK(i2s_set_pin(I2S_NUM_DAC, &pin_config));
+    ESP_LOGI(TAG, "I2S DAC driver installed");
+
+    // Set I2S clock
+    i2s_set_clk(I2S_NUM_DAC, I2S_SAMPLE_RATE, I2S_BITS_PER_SAMPLE_32BIT, I2S_CHANNEL_MONO);
+    ESP_LOGI(TAG, "I2S DAC clock set to %d Hz", I2S_SAMPLE_RATE);
 }
 
 // Function to play a test tone
@@ -94,7 +133,7 @@ static void play_test_tone(void)
 {
     ESP_LOGI(TAG, "Playing test tone...");
     
-    int32_t test_buffer[BUFFER_SIZE];
+    int32_t test_buffer[BUFFER_SIZE * 2];  // Doubled buffer size for stereo
     size_t bytes_written;
     float phase = 0.0f;
     
@@ -110,10 +149,12 @@ static void play_test_tone(void)
         ESP_LOGI(TAG, "Playing tone at %.1f Hz", frequencies[f]);
         
         for (int i = 0; i < buffers_to_play; i++) {
-            // Generate sine wave
+            // Generate sine wave for both channels
             for (int j = 0; j < BUFFER_SIZE; j++) {
                 float sample = sinf(phase) * MAX_24BIT * 0.5f; // 50% amplitude
-                test_buffer[j] = (int32_t)sample << 8; // Shift for DAC
+                int32_t sample_shifted = (int32_t)sample << 8; // Shift for DAC
+                test_buffer[j * 2] = sample_shifted;     // Left channel
+                test_buffer[j * 2 + 1] = sample_shifted; // Right channel
                 phase += phase_increment;
                 if (phase >= 2.0f * M_PI) {
                     phase -= 2.0f * M_PI;
@@ -121,7 +162,7 @@ static void play_test_tone(void)
             }
             
             // Write to DAC
-            i2s_write(I2S_NUM, test_buffer, sizeof(test_buffer), &bytes_written, portMAX_DELAY);
+            i2s_write(I2S_NUM_DAC, test_buffer, sizeof(test_buffer), &bytes_written, portMAX_DELAY);
         }
         
         // Short silence between tones
@@ -134,8 +175,8 @@ static void play_test_tone(void)
 // Audio processing task
 static void audio_task(void *pvParameters)
 {
-    int32_t i2s_read_buff[BUFFER_SIZE];
-    int32_t i2s_write_buff[BUFFER_SIZE];
+    int32_t i2s_read_buff[BUFFER_SIZE * 2];  // Doubled buffer size for stereo
+    int32_t i2s_write_buff[BUFFER_SIZE * 2]; // Doubled buffer size for stereo
     size_t bytes_read;
     size_t bytes_written;
     int sample_count = 0;
@@ -146,7 +187,7 @@ static void audio_task(void *pvParameters)
     int32_t clipped_samples = 0;
 
     while (1) {
-        esp_err_t res = i2s_read(I2S_NUM, &i2s_read_buff, sizeof(i2s_read_buff), &bytes_read, portMAX_DELAY);
+        esp_err_t res = i2s_read(I2S_NUM_ADC, &i2s_read_buff, sizeof(i2s_read_buff), &bytes_read, portMAX_DELAY);
         if (res == ESP_OK) {
             int samples = bytes_read / sizeof(int32_t);
             
@@ -157,38 +198,50 @@ static void audio_task(void *pvParameters)
             clipped_samples = 0;
 
             // Process samples and copy to write buffer
-            for (int i = 0; i < samples; i++) {
+            for (int i = 0; i < samples; i += 2) {  // Process both channels
                 // PCM1808 outputs 24-bit data in 32-bit container, so we need to shift right by 8
-                int32_t sample = i2s_read_buff[i] >> 8;
+                int32_t left_sample = i2s_read_buff[i] >> 8;
+                int32_t right_sample = i2s_read_buff[i + 1] >> 8;
                 
-                // Apply gain
-                float amplified = (float)sample * current_gain;
+                // Apply gain to both channels
+                float left_amplified = (float)left_sample * current_gain;
+                float right_amplified = (float)right_sample * current_gain;
                 
                 // Check for clipping
-                if (amplified > MAX_24BIT) {
-                    amplified = MAX_24BIT;
+                if (left_amplified > MAX_24BIT) {
+                    left_amplified = MAX_24BIT;
                     clipped_samples++;
-                } else if (amplified < -MAX_24BIT) {
-                    amplified = -MAX_24BIT;
+                } else if (left_amplified < -MAX_24BIT) {
+                    left_amplified = -MAX_24BIT;
+                    clipped_samples++;
+                }
+                
+                if (right_amplified > MAX_24BIT) {
+                    right_amplified = MAX_24BIT;
+                    clipped_samples++;
+                } else if (right_amplified < -MAX_24BIT) {
+                    right_amplified = -MAX_24BIT;
                     clipped_samples++;
                 }
                 
                 // Convert back to integer and shift for DAC
-                i2s_write_buff[i] = (int32_t)amplified << 8;
+                i2s_write_buff[i] = (int32_t)left_amplified << 8;
+                i2s_write_buff[i + 1] = (int32_t)right_amplified << 8;
                 
-                // Update statistics
-                if (sample > max_value) max_value = sample;
-                if (sample < min_value) min_value = sample;
-                sum += abs(sample);
+                // Update statistics using the maximum of both channels
+                int32_t max_sample = (abs(left_sample) > abs(right_sample)) ? left_sample : right_sample;
+                if (max_sample > max_value) max_value = max_sample;
+                if (max_sample < min_value) min_value = max_sample;
+                sum += abs(max_sample);
                 
                 // Update peak value
-                if (abs(sample) > peak_value) {
-                    peak_value = abs(sample);
+                if (abs(max_sample) > peak_value) {
+                    peak_value = abs(max_sample);
                 }
             }
 
             // Write to DAC
-            i2s_write(I2S_NUM, i2s_write_buff, bytes_read, &bytes_written, portMAX_DELAY);
+            i2s_write(I2S_NUM_DAC, i2s_write_buff, bytes_read, &bytes_written, portMAX_DELAY);
 
             // Calculate average
             int32_t avg = sum / samples;
@@ -235,7 +288,8 @@ void app_main(void)
 {
     // Initialize hardware
     init_mclk_output();       // Start MCLK output to drive the ADC
-    init_i2s_adc_input();     // Start I2S to receive audio data
+    init_i2s_adc_input();     // Start I2S to receive audio data from ADC
+    init_i2s_dac_output();    // Start I2S to send audio data to DAC
 
     // Play test tone sequence
     play_test_tone();
