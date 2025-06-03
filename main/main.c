@@ -68,7 +68,7 @@ static void init_i2s_adc_input(void)
         .mode = I2S_MODE_MASTER | I2S_MODE_RX,  // ADC is RX only
         .sample_rate = I2S_SAMPLE_RATE,
         .bits_per_sample = I2S_BITS_PER_SAMPLE_32BIT,
-        .channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT,  // Changed to stereo
+        .channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT,  // Stereo
         .communication_format = I2S_COMM_FORMAT_STAND_I2S,
         .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
         .dma_buf_count = 4,           // Reduced buffer count
@@ -91,7 +91,7 @@ static void init_i2s_adc_input(void)
     ESP_LOGI(TAG, "I2S ADC driver installed");
 
     // Set I2S clock
-    i2s_set_clk(I2S_NUM_ADC, I2S_SAMPLE_RATE, I2S_BITS_PER_SAMPLE_32BIT, I2S_CHANNEL_MONO);
+    i2s_set_clk(I2S_NUM_ADC, I2S_SAMPLE_RATE, I2S_BITS_PER_SAMPLE_32BIT, I2S_CHANNEL_STEREO);  // Changed to stereo
     ESP_LOGI(TAG, "I2S ADC clock set to %d Hz", I2S_SAMPLE_RATE);
 }
 
@@ -101,7 +101,7 @@ static void init_i2s_dac_output(void)
         .mode = I2S_MODE_MASTER | I2S_MODE_TX,  // DAC is TX only
         .sample_rate = I2S_SAMPLE_RATE,
         .bits_per_sample = I2S_BITS_PER_SAMPLE_32BIT,
-        .channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT,  // Changed to stereo
+        .channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT,  // Stereo
         .communication_format = I2S_COMM_FORMAT_STAND_I2S,
         .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
         .dma_buf_count = 4,
@@ -124,7 +124,7 @@ static void init_i2s_dac_output(void)
     ESP_LOGI(TAG, "I2S DAC driver installed");
 
     // Set I2S clock
-    i2s_set_clk(I2S_NUM_DAC, I2S_SAMPLE_RATE, I2S_BITS_PER_SAMPLE_32BIT, I2S_CHANNEL_MONO);
+    i2s_set_clk(I2S_NUM_DAC, I2S_SAMPLE_RATE, I2S_BITS_PER_SAMPLE_32BIT, I2S_CHANNEL_STEREO);  // Changed to stereo
     ESP_LOGI(TAG, "I2S DAC clock set to %d Hz", I2S_SAMPLE_RATE);
 }
 
@@ -249,7 +249,7 @@ static void audio_task(void *pvParameters)
             // Calculate signal level as percentage of max 24-bit value
             float signal_level = (float)peak_value / MAX_24BIT * 100.0f;
 
-            // Print statistics every 1000 batches
+            // Print statistics every second (48000 samples)
             if (++sample_count % 48000 == 0) {
                 ESP_LOGI(TAG, "=== Audio Signal Analysis ===");
                 ESP_LOGI(TAG, "Current Gain: %.1fx", current_gain);
@@ -269,16 +269,6 @@ static void audio_task(void *pvParameters)
                     level_bar[i] = '|';
                 }
                 ESP_LOGI(TAG, "Level: [%-20s]", level_bar);
-                
-                // Print first few samples for debugging
-                /*ESP_LOGI(TAG, "First 5 samples (raw values):");
-                for (int i = 0; i < 5 && i < samples; i++) {
-                    ESP_LOGI(TAG, "  Sample[%d]: %ld (%.2f%%)", 
-                            i, 
-                            i2s_read_buff[i] >> 8,
-                            (float)(i2s_read_buff[i] >> 8) / MAX_24BIT * 100.0f);
-                }
-                ESP_LOGI(TAG, "===========================");*/
             }
         }
     }
