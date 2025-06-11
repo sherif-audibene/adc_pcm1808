@@ -10,5 +10,10 @@
     "IDF_TARGET": "esp32s3"
   },
   "idf.port": "/dev/tty.wchusbserial56E10090661",
-  "idf.flashType": "UART"
+  "idf.flashType": "UART",
+  "files.associations": {
+    "i2s.h": "c",
+    "compare": "c",
+    "cstdint": "c"
+  }
 }
