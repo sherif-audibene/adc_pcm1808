@@ -4,10 +4,10 @@
   "idf.toolsPath": "/Users/sherifhamad/.espressif",
   "idf.pythonInstallPath": "/usr/local/bin/python",
   "idf.openOcdConfigs": [
-    "board/esp32s3-builtin.cfg"
+    "board/esp32-wrover-kit-3.3v.cfg"
   ],
   "idf.customExtraVars": {
-    "IDF_TARGET": "esp32s3"
+    "IDF_TARGET": "esp32"
   },
   "idf.port": "/dev/tty.wchusbserial56E10090661",
   "idf.flashType": "UART",

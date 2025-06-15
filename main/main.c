@@ -20,7 +20,7 @@
 #define I2S_WS_IO       (7)
 #define I2S_DIN_IO      (6)
 #define MCLK_GPIO       (0)
-#define MCLK_FREQ_HZ    (12288000) // 256 × 48kHz
+#define MCLK_FREQ_HZ    (5644800) // 128 × 48kHz - Lower frequency test
 
 // DAC (PCM5102) pins
 #define I2S_DOUT_IO     (17)  // PCM5102 DIN
@@ -43,20 +43,107 @@
 #define DIAGNOSTIC_MODE_SILENCE     1  
 #define DIAGNOSTIC_MODE_TEST_TONE   2
 #define DIAGNOSTIC_MODE_NORMAL      3
+#define DIAGNOSTIC_MODE_NO_MCLK     4  // Test without MCLK
+#define DIAGNOSTIC_MODE_I2S_FMT_TEST 5  // Test different I2S formats
 
 // Add diagnostic control variable
 static int diagnostic_mode = DIAGNOSTIC_MODE_NORMAL;
 static bool enable_detailed_logging = false;
+static bool audio_task_paused = false;  // Flag to pause audio task
 
 static const char *TAG = "PCM1808_APP";
 static float current_gain = DEFAULT_GAIN;
 
+// Function declarations
+static void init_i2s_adc_input(void);
+
 // Add diagnostic control function
 void set_diagnostic_mode(int mode) {
-    if (mode >= 0 && mode <= 3) {
+    if (mode >= 0 && mode <= 5) {
         diagnostic_mode = mode;
         ESP_LOGI(TAG, "Diagnostic mode set to: %d", mode);
     }
+}
+
+// Add PCM1808 reset function
+void reset_pcm1808(void) {
+    ESP_LOGI(TAG, "Resetting PCM1808 by reinitializing I2S...");
+    
+    // Stop I2S
+    i2s_driver_uninstall(I2S_NUM_ADC);
+    vTaskDelay(pdMS_TO_TICKS(100)); // Wait 100ms
+    
+    // Restart I2S ADC
+    init_i2s_adc_input();
+    vTaskDelay(pdMS_TO_TICKS(100)); // Wait 100ms
+    
+    ESP_LOGI(TAG, "PCM1808 reset complete");
+}
+
+// Test different I2S formats
+void test_i2s_format(int format_type) {
+    ESP_LOGI(TAG, "Testing I2S format %d", format_type);
+    
+    // Pause audio task first
+    audio_task_paused = true;
+    vTaskDelay(pdMS_TO_TICKS(200)); // Wait for audio task to pause
+    
+    // Stop current I2S
+    i2s_driver_uninstall(I2S_NUM_ADC);
+    vTaskDelay(pdMS_TO_TICKS(100));
+    
+    i2s_config_t i2s_config = {
+        .mode = I2S_MODE_MASTER | I2S_MODE_RX,
+        .sample_rate = I2S_SAMPLE_RATE,
+        .bits_per_sample = I2S_BITS_PER_SAMPLE_32BIT,
+        .channel_format = I2S_CHANNEL_FMT_RIGHT_LEFT,
+        .intr_alloc_flags = ESP_INTR_FLAG_LEVEL1,
+        .dma_buf_count = 8,
+        .dma_buf_len = BUFFER_SIZE,
+        .use_apll = true,
+        .tx_desc_auto_clear = true,
+        .fixed_mclk = MCLK_FREQ_HZ
+    };
+    
+    // Test different communication formats
+    switch(format_type) {
+        case 0:
+            i2s_config.communication_format = I2S_COMM_FORMAT_STAND_I2S;
+            ESP_LOGI(TAG, "Testing STANDARD I2S format");
+            break;
+        case 1:
+            i2s_config.communication_format = I2S_COMM_FORMAT_STAND_MSB;
+            ESP_LOGI(TAG, "Testing MSB format (left-justified)");
+            break;
+        case 2:
+            i2s_config.communication_format = I2S_COMM_FORMAT_STAND_PCM_SHORT;
+            ESP_LOGI(TAG, "Testing PCM SHORT format");
+            break;
+        case 3:
+            i2s_config.communication_format = I2S_COMM_FORMAT_STAND_PCM_LONG;
+            ESP_LOGI(TAG, "Testing PCM LONG format");
+            break;
+        default:
+            i2s_config.communication_format = I2S_COMM_FORMAT_STAND_I2S;
+            break;
+    }
+
+    i2s_pin_config_t pin_config = {
+        .mck_io_num = MCLK_GPIO,
+        .bck_io_num = I2S_BCK_IO,
+        .ws_io_num = I2S_WS_IO,
+        .data_out_num = I2S_PIN_NO_CHANGE,
+        .data_in_num = I2S_DIN_IO
+    };
+
+    ESP_ERROR_CHECK(i2s_driver_install(I2S_NUM_ADC, &i2s_config, 0, NULL));
+    ESP_ERROR_CHECK(i2s_set_pin(I2S_NUM_ADC, &pin_config));
+    i2s_set_clk(I2S_NUM_ADC, I2S_SAMPLE_RATE, I2S_BITS_PER_SAMPLE_32BIT, I2S_CHANNEL_STEREO);
+    
+    ESP_LOGI(TAG, "I2S format %d initialized", format_type);
+    
+    // Resume audio task
+    audio_task_paused = false;
 }
 
 // Add console command for diagnostic mode
@@ -74,17 +161,58 @@ static int cmd_diag_mode(int argc, char **argv)
     }
 
     int mode = diag_args.mode->ival[0];
-    if (mode >= 0 && mode <= 3) {
+    if (mode >= 0 && mode <= 5) {
         set_diagnostic_mode(mode);
-        const char* mode_names[] = {"PASSTHROUGH", "SILENCE", "TEST_TONE", "NORMAL"};
+        const char* mode_names[] = {"PASSTHROUGH", "SILENCE", "TEST_TONE", "NORMAL", "NO_MCLK", "I2S_FMT_TEST"};
         printf("Diagnostic mode set to %d (%s)\n", mode, mode_names[mode]);
         printf("Modes:\n");
         printf("  0 - PASSTHROUGH: Simple passthrough without DC filtering\n");
         printf("  1 - SILENCE: Output silence (tests output path)\n");
         printf("  2 - TEST_TONE: Generate 1kHz test tone\n");
         printf("  3 - NORMAL: Full processing with DC filtering\n");
+        printf("  4 - NO_MCLK: Test without MCLK\n");
+        printf("  5 - I2S_FMT_TEST: Test different I2S formats\n");
     } else {
-        printf("Invalid mode. Use 0-3\n");
+        printf("Invalid mode. Use 0-5\n");
+        return 1;
+    }
+    return 0;
+}
+
+// Add reset command
+static int cmd_reset_pcm(int argc, char **argv)
+{
+    reset_pcm1808();
+    printf("PCM1808 reset completed\n");
+    return 0;
+}
+
+// Add I2S format test command
+static struct {
+    struct arg_int *format;
+    struct arg_end *end;
+} i2s_fmt_args;
+
+static int cmd_i2s_format(int argc, char **argv)
+{
+    int nerrors = arg_parse(argc, argv, (void **) &i2s_fmt_args);
+    if (nerrors != 0) {
+        arg_print_errors(stderr, i2s_fmt_args.end, argv[0]);
+        return 1;
+    }
+
+    int format = i2s_fmt_args.format->ival[0];
+    if (format >= 0 && format <= 3) {
+        test_i2s_format(format);
+        const char* format_names[] = {"STANDARD_I2S", "MSB_LEFT_JUSTIFIED", "PCM_SHORT", "PCM_LONG"};
+        printf("I2S format set to %d (%s)\n", format, format_names[format]);
+        printf("Formats:\n");
+        printf("  0 - STANDARD I2S\n");
+        printf("  1 - MSB (Left-justified) - TRY THIS FIRST\n");
+        printf("  2 - PCM SHORT\n");
+        printf("  3 - PCM LONG\n");
+    } else {
+        printf("Invalid format. Use 0-3\n");
         return 1;
     }
     return 0;
@@ -92,7 +220,7 @@ static int cmd_diag_mode(int argc, char **argv)
 
 static void register_diag_mode(void)
 {
-    diag_args.mode = arg_int1(NULL, NULL, "<mode>", "Diagnostic mode (0-3)");
+    diag_args.mode = arg_int1(NULL, NULL, "<mode>", "Diagnostic mode (0-5)");
     diag_args.end = arg_end(2);
 
     const esp_console_cmd_t cmd = {
@@ -103,6 +231,33 @@ static void register_diag_mode(void)
         .argtable = &diag_args
     };
     ESP_ERROR_CHECK(esp_console_cmd_register(&cmd));
+}
+
+static void register_reset_cmd(void)
+{
+    const esp_console_cmd_t reset_cmd = {
+        .command = "reset",
+        .help = "Reset PCM1808 by reinitializing I2S",
+        .hint = NULL,
+        .func = &cmd_reset_pcm,
+        .argtable = NULL
+    };
+    ESP_ERROR_CHECK(esp_console_cmd_register(&reset_cmd));
+}
+
+static void register_i2s_format_cmd(void)
+{
+    i2s_fmt_args.format = arg_int1(NULL, NULL, "<format>", "I2S format (0-3)");
+    i2s_fmt_args.end = arg_end(2);
+
+    const esp_console_cmd_t i2s_fmt_cmd = {
+        .command = "i2s",
+        .help = "Test different I2S formats",
+        .hint = NULL,
+        .func = &cmd_i2s_format,
+        .argtable = &i2s_fmt_args
+    };
+    ESP_ERROR_CHECK(esp_console_cmd_register(&i2s_fmt_cmd));
 }
 
 // Add console initialization
@@ -155,6 +310,8 @@ static void initialize_console(void)
 
     /* Register commands */
     register_diag_mode();
+    register_reset_cmd();
+    register_i2s_format_cmd();
 }
 
 // Console task
@@ -168,6 +325,10 @@ static void console_task(void *pvParameters)
     printf("  diag 1 - SILENCE (test output path)\n");  
     printf("  diag 2 - TEST_TONE (generate 1kHz tone)\n");
     printf("  diag 3 - NORMAL (full processing)\n");
+    printf("  diag 4 - NO_MCLK (test without MCLK)\n");
+    printf("  diag 5 - I2S_FMT_TEST (test different I2S formats)\n");
+    printf("Type 'reset' to reinitialize PCM1808\n");
+    printf("Type 'i2s <format>' to test I2S formats (try 'i2s 1' first)\n");
     printf("Current mode: %d\n", diagnostic_mode);
     printf("\n");
 
@@ -339,6 +500,12 @@ static void audio_task(void *pvParameters)
     ESP_LOGI(TAG, "Audio task started in diagnostic mode: %d", diagnostic_mode);
 
     while (1) {
+        // Check if audio task should be paused
+        if (audio_task_paused) {
+            vTaskDelay(pdMS_TO_TICKS(10)); // Wait while paused
+            continue;
+        }
+        
         // Always read from ADC to keep I2S running
         esp_err_t res = i2s_read(I2S_NUM_ADC, &i2s_read_buff, sizeof(i2s_read_buff), &bytes_read, portMAX_DELAY);
         if (res == ESP_OK) {
@@ -402,27 +569,26 @@ static void audio_task(void *pvParameters)
                         float left_float = (float)left_sample;
                         float right_float = (float)right_sample;
                         
-                        // More conservative DC blocking
-                        float left_filtered = left_float;
-                        float right_filtered = right_float;
+                        // Always apply DC blocking to prevent accumulation
+                        // High-pass filter: y[n] = alpha * (y[n-1] + x[n] - x[n-1])
+                        float left_filtered = dc_filter_alpha * (left_dc_filter_y1 + left_float - left_dc_filter_x1);
+                        float right_filtered = dc_filter_alpha * (right_dc_filter_y1 + right_float - right_dc_filter_x1);
                         
-                        if (dc_sample_count > 4800) { // After some samples
-                            int32_t left_dc_avg = left_dc_accumulator / dc_sample_count;
-                            int32_t right_dc_avg = right_dc_accumulator / dc_sample_count;
-                            
-                            // Only apply DC blocking if offset is significant
-                            if (abs(left_dc_avg) > 10000) {
-                                left_filtered = dc_filter_alpha * (left_dc_filter_y1 + left_float - left_dc_filter_x1);
-                                left_dc_filter_x1 = left_float;
-                                left_dc_filter_y1 = left_filtered;
-                            }
-                            
-                            if (abs(right_dc_avg) > 10000) {
-                                right_filtered = dc_filter_alpha * (right_dc_filter_y1 + right_float - right_dc_filter_x1);
-                                right_dc_filter_x1 = right_float;
-                                right_dc_filter_y1 = right_filtered;
-                            }
-                        }
+                        // Update filter memory
+                        left_dc_filter_x1 = left_float;
+                        left_dc_filter_y1 = left_filtered;
+                        right_dc_filter_x1 = right_float;
+                        right_dc_filter_y1 = right_filtered;
+                        
+                        // Additional DC removal with tracking average
+                        static float left_dc_track = 0.0f, right_dc_track = 0.0f;
+                        const float dc_track_alpha = 0.99995f; // Very slow DC tracking
+                        left_dc_track = dc_track_alpha * left_dc_track + (1.0f - dc_track_alpha) * left_filtered;
+                        right_dc_track = dc_track_alpha * right_dc_track + (1.0f - dc_track_alpha) * right_filtered;
+                        
+                        // Remove tracked DC component
+                        left_filtered -= left_dc_track;
+                        right_filtered -= right_dc_track;
                         
                         // Gradual startup gain
                         float effective_gain = current_gain;
@@ -510,16 +676,22 @@ static void audio_task(void *pvParameters)
 void app_main(void)
 {
     // Initialize hardware
+    ESP_LOGI(TAG, "Starting PCM1808 Audio Diagnostics");
+    
+    // Try lower MCLK frequency first
     init_mclk_output();       // Start MCLK output to drive the ADC
     init_i2s_adc_input();     // Start I2S to receive audio data from ADC
     init_i2s_dac_output();    // Start I2S to send audio data to DAC
-
-    // Play test tone sequence
-    //play_test_tone();
 
     // Create audio processing task
     xTaskCreatePinnedToCore(audio_task, "audio_task", TASK_STACK_SIZE, NULL, 5, NULL, 1);
 
     // Create console task
     xTaskCreatePinnedToCore(console_task, "console_task", TASK_STACK_SIZE, NULL, 5, NULL, 1);
+    
+    ESP_LOGI(TAG, "=== NOISE TROUBLESHOOTING SUGGESTIONS ===");
+    ESP_LOGI(TAG, "1. Try 'diag 1' for silence test");
+    ESP_LOGI(TAG, "2. Check power supply with oscilloscope");
+    ESP_LOGI(TAG, "3. Try different ground connections");
+    ESP_LOGI(TAG, "4. Test with lower MCLK frequency (now 6.144MHz)");
 }
