@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/queue.h"
 #include "driver/i2s.h"
 #include "driver/ledc.h"
 #include "esp_log.h"
@@ -30,7 +31,7 @@
 #define TASK_STACK_SIZE 4096         // Increased stack size
 
 // Volume control
-#define DEFAULT_GAIN    0.5f         // Increased default gain
+#define DEFAULT_GAIN    0.1f         // Increased default gain
 #define MAX_GAIN        1.0f        // Increased maximum gain
 #define MIN_GAIN        0.1f         // Minimum gain
 
@@ -41,10 +42,24 @@
 // Display update rate
 #define DISPLAY_UPDATE_INTERVAL_MS 50  // 20 FPS
 
-// Buffer for display
-static int32_t display_samples[SH1107_WIDTH];
-static int display_sample_index = 0;
+// Display update task configuration
+#define DISPLAY_TASK_STACK_SIZE 4096
+#define DISPLAY_TASK_PRIORITY   5
+#define DISPLAY_TASK_CORE_ID   1  // Run on second core
 
+// Queue size for display updates
+#define DISPLAY_QUEUE_SIZE 2
+
+// Structure to hold display data
+typedef struct {
+    int32_t samples[SH1107_WIDTH];
+    float signal_level;
+    float current_gain;
+} display_data_t;
+
+// Global variables
+static QueueHandle_t display_queue = NULL;
+static int display_sample_index = 0;  // Added back the sample index
 static const char *TAG = "PCM1808_APP";
 static float current_gain = DEFAULT_GAIN;
 
@@ -183,6 +198,21 @@ static void play_test_tone(void)
     ESP_LOGI(TAG, "Test tone sequence completed");
 }
 
+// Display task running on core 1
+static void display_task(void *pvParameters) {
+    display_data_t display_data;
+    
+    while (1) {
+        // Wait for new display data
+        if (xQueueReceive(display_queue, &display_data, pdMS_TO_TICKS(DISPLAY_UPDATE_INTERVAL_MS)) == pdTRUE) {
+            // Update the display
+            sh1107_draw_wave(display_data.samples, SH1107_WIDTH);
+            sh1107_display_stats(display_data.signal_level, display_data.current_gain);
+            sh1107_update();
+        }
+    }
+}
+
 // Modified audio processing task
 static void audio_task(void *pvParameters)
 {
@@ -197,6 +227,7 @@ static void audio_task(void *pvParameters)
     int32_t peak_value = 0;
     int32_t clipped_samples = 0;
     TickType_t last_display_update = xTaskGetTickCount();
+    display_data_t display_data = {0};
 
     while (1) {
         esp_err_t res = i2s_read(I2S_NUM_ADC, &i2s_read_buff, sizeof(i2s_read_buff), &bytes_read, portMAX_DELAY);
@@ -215,7 +246,7 @@ static void audio_task(void *pvParameters)
                 int32_t right_sample = i2s_read_buff[i + 1] >> 8;
                 
                 // Store samples for display (use left channel)
-                display_samples[display_sample_index] = left_sample;
+                display_data.samples[display_sample_index] = left_sample;
                 display_sample_index = (display_sample_index + 1) % SH1107_WIDTH;
                 
                 // Apply gain to both channels
@@ -262,9 +293,13 @@ static void audio_task(void *pvParameters)
 
             // Update display at fixed interval
             if ((xTaskGetTickCount() - last_display_update) >= pdMS_TO_TICKS(DISPLAY_UPDATE_INTERVAL_MS)) {
-                sh1107_draw_wave(display_samples, SH1107_WIDTH);
-                sh1107_display_stats(signal_level, current_gain);
-                sh1107_update();
+                // Update display data
+                display_data.signal_level = signal_level;
+                display_data.current_gain = current_gain;
+                
+                // Send to display task (non-blocking)
+                xQueueSendToBack(display_queue, &display_data, 0);
+                
                 last_display_update = xTaskGetTickCount();
             }
 
@@ -296,9 +331,32 @@ void app_main(void)
         return;
     }
 
+    // Create display queue
+    display_queue = xQueueCreate(DISPLAY_QUEUE_SIZE, sizeof(display_data_t));
+    if (display_queue == NULL) {
+        ESP_LOGE(TAG, "Failed to create display queue");
+        return;
+    }
+
     // Play test tone sequence
     play_test_tone();
 
-    // Create audio processing task
+    // Create display task on core 1
+    BaseType_t ret_task = xTaskCreatePinnedToCore(
+        display_task,
+        "display_task",
+        DISPLAY_TASK_STACK_SIZE,
+        NULL,
+        DISPLAY_TASK_PRIORITY,
+        NULL,
+        DISPLAY_TASK_CORE_ID
+    );
+    
+    if (ret_task != pdPASS) {
+        ESP_LOGE(TAG, "Failed to create display task");
+        return;
+    }
+
+    // Create audio processing task (will run on core 0 by default)
     xTaskCreate(audio_task, "audio_task", TASK_STACK_SIZE, NULL, 5, NULL);
 }
