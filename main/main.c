@@ -5,6 +5,7 @@
 #include "driver/ledc.h"
 #include "esp_log.h"
 #include <math.h>
+#include "sh1107.h"
 
 #define I2S_NUM_ADC     (0)    // I2S number for ADC (PCM1808)
 #define I2S_NUM_DAC     (1)    // I2S number for DAC (PCM5102)
@@ -24,7 +25,6 @@
 #define I2S_SAMPLE_RATE (48000) // PCM1808 default FS = 48kHz
 
 // Constants for signal level calculation
-#define MAX_24BIT       (8388607)    // Maximum 24-bit value
 #define SIGNAL_THRESHOLD (MAX_24BIT / 100)  // 1% of max value
 #define BUFFER_SIZE     64           // Reduced buffer size
 #define TASK_STACK_SIZE 4096         // Increased stack size
@@ -33,6 +33,17 @@
 #define DEFAULT_GAIN    0.5f         // Increased default gain
 #define MAX_GAIN        1.0f        // Increased maximum gain
 #define MIN_GAIN        0.1f         // Minimum gain
+
+// Display pins
+#define DISPLAY_SCL_PIN 13
+#define DISPLAY_SDA_PIN 12
+
+// Display update rate
+#define DISPLAY_UPDATE_INTERVAL_MS 50  // 20 FPS
+
+// Buffer for display
+static int32_t display_samples[SH1107_WIDTH];
+static int display_sample_index = 0;
 
 static const char *TAG = "PCM1808_APP";
 static float current_gain = DEFAULT_GAIN;
@@ -172,11 +183,11 @@ static void play_test_tone(void)
     ESP_LOGI(TAG, "Test tone sequence completed");
 }
 
-// Audio processing task
+// Modified audio processing task
 static void audio_task(void *pvParameters)
 {
-    int32_t i2s_read_buff[BUFFER_SIZE * 2];  // Doubled buffer size for stereo
-    int32_t i2s_write_buff[BUFFER_SIZE * 2]; // Doubled buffer size for stereo
+    int32_t i2s_read_buff[BUFFER_SIZE * 2];
+    int32_t i2s_write_buff[BUFFER_SIZE * 2];
     size_t bytes_read;
     size_t bytes_written;
     int sample_count = 0;
@@ -185,6 +196,7 @@ static void audio_task(void *pvParameters)
     int64_t sum = 0;
     int32_t peak_value = 0;
     int32_t clipped_samples = 0;
+    TickType_t last_display_update = xTaskGetTickCount();
 
     while (1) {
         esp_err_t res = i2s_read(I2S_NUM_ADC, &i2s_read_buff, sizeof(i2s_read_buff), &bytes_read, portMAX_DELAY);
@@ -198,10 +210,13 @@ static void audio_task(void *pvParameters)
             clipped_samples = 0;
 
             // Process samples and copy to write buffer
-            for (int i = 0; i < samples; i += 2) {  // Process both channels
-                // PCM1808 outputs 24-bit data in 32-bit container, so we need to shift right by 8
+            for (int i = 0; i < samples; i += 2) {
                 int32_t left_sample = i2s_read_buff[i] >> 8;
                 int32_t right_sample = i2s_read_buff[i + 1] >> 8;
+                
+                // Store samples for display (use left channel)
+                display_samples[display_sample_index] = left_sample;
+                display_sample_index = (display_sample_index + 1) % SH1107_WIDTH;
                 
                 // Apply gain to both channels
                 float left_amplified = (float)left_sample * current_gain;
@@ -234,7 +249,6 @@ static void audio_task(void *pvParameters)
                 if (max_sample < min_value) min_value = max_sample;
                 sum += abs(max_sample);
                 
-                // Update peak value
                 if (abs(max_sample) > peak_value) {
                     peak_value = abs(max_sample);
                 }
@@ -243,32 +257,26 @@ static void audio_task(void *pvParameters)
             // Write to DAC
             i2s_write(I2S_NUM_DAC, i2s_write_buff, bytes_read, &bytes_written, portMAX_DELAY);
 
-            // Calculate average
-            int32_t avg = sum / samples;
-            
             // Calculate signal level as percentage of max 24-bit value
             float signal_level = (float)peak_value / MAX_24BIT * 100.0f;
+
+            // Update display at fixed interval
+            if ((xTaskGetTickCount() - last_display_update) >= pdMS_TO_TICKS(DISPLAY_UPDATE_INTERVAL_MS)) {
+                sh1107_draw_wave(display_samples, SH1107_WIDTH);
+                sh1107_display_stats(signal_level, current_gain);
+                sh1107_update();
+                last_display_update = xTaskGetTickCount();
+            }
 
             // Print statistics every second (48000 samples)
             if (++sample_count % 48000 == 0) {
                 ESP_LOGI(TAG, "=== Audio Signal Analysis ===");
                 ESP_LOGI(TAG, "Current Gain: %.1fx", current_gain);
                 ESP_LOGI(TAG, "Signal Level: %.2f%% of max", signal_level);
-                ESP_LOGI(TAG, "Peak Value: %ld (%.2f%% of max)", peak_value, (float)peak_value/MAX_24BIT * 100.0f);
-                ESP_LOGI(TAG, "Max: %ld", max_value);
-                ESP_LOGI(TAG, "Min: %ld", min_value);
-                ESP_LOGI(TAG, "Avg: %ld", avg);
+                ESP_LOGI(TAG, "Peak Value: %ld", peak_value);
                 if (clipped_samples > 0) {
                     ESP_LOGI(TAG, "WARNING: %ld samples clipped!", clipped_samples);
                 }
-                
-                // Print signal level indicator
-                int bars = (int)(signal_level / 5); // 20 bars max
-                char level_bar[21] = {0};
-                for (int i = 0; i < bars && i < 20; i++) {
-                    level_bar[i] = '|';
-                }
-                ESP_LOGI(TAG, "Level: [%-20s]", level_bar);
             }
         }
     }
@@ -280,6 +288,13 @@ void app_main(void)
     init_mclk_output();       // Start MCLK output to drive the ADC
     init_i2s_adc_input();     // Start I2S to receive audio data from ADC
     init_i2s_dac_output();    // Start I2S to send audio data to DAC
+
+    // Initialize display
+    esp_err_t ret = sh1107_init(DISPLAY_SDA_PIN, DISPLAY_SCL_PIN);
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to initialize display");
+        return;
+    }
 
     // Play test tone sequence
     play_test_tone();

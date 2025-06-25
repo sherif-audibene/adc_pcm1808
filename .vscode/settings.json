@@ -9,6 +9,6 @@
   "idf.customExtraVars": {
     "IDF_TARGET": "esp32s3"
   },
-  "idf.port": "/dev/tty.wchusbserial56E10090661",
+  "idf.port": "/dev/tty.usbmodem114201",
   "idf.flashType": "UART"
 }
