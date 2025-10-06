@@ -12,18 +12,19 @@
 #define I2S_NUM_DAC     (1)    // I2S number for DAC (PCM5102)
 
 // ADC (PCM1808) pins
-#define I2S_BCK_IO      (5)
+#define I2S_BCK_IO      (6)
 #define I2S_WS_IO       (7)
-#define I2S_DIN_IO      (6)
+#define I2S_DIN_IO      (5)
 #define MCLK_GPIO       (0)
 #define MCLK_FREQ_HZ    (12288000) // 256 × 48kHz
 
 // DAC (PCM5102) pins
 #define I2S_DOUT_IO     (17)  // PCM5102 DIN
-#define I2S_BCK_DAC_IO  (18)  // PCM5102 BCK
-#define I2S_WS_DAC_IO   (16)  // PCM5102 LCK
+#define I2S_BCK_DAC_IO  (5)  // PCM5102 BCK
+#define I2S_WS_DAC_IO   (7)  // PCM5102 LCK
 
 #define I2S_SAMPLE_RATE (48000) // PCM1808 default FS = 48kHz
+
 
 // Constants for signal level calculation
 #define SIGNAL_THRESHOLD (MAX_24BIT / 100)  // 1% of max value
@@ -31,9 +32,9 @@
 #define TASK_STACK_SIZE 4096         // Increased stack size
 
 // Volume control
-#define DEFAULT_GAIN    0.1f         // Increased default gain
+#define DEFAULT_GAIN    0.5f         // Increased default gain
 #define MAX_GAIN        1.0f        // Increased maximum gain
-#define MIN_GAIN        0.1f         // Minimum gain
+#define MIN_GAIN        0.5f         // Minimum gain
 
 // Display pins
 #define DISPLAY_SCL_PIN 13
@@ -164,10 +165,10 @@ static void play_test_tone(void)
     float phase = 0.0f;
     
     // Play a sequence of tones
-    const float frequencies[] = {440.0f, 880.0f, 1760.0f}; // A4, A5, A6
-    const int duration_ms = 1000; // 1 second per tone
+    const float frequencies[] = {440.0f}; // A4, A5, A6
+    const int duration_ms = 100; // 1 second per tone
     
-    for (int f = 0; f < 3; f++) {
+    for (int f = 0; f < 1; f++) {
         float phase_increment = 2.0f * M_PI * frequencies[f] / I2S_SAMPLE_RATE;
         int samples_to_play = (I2S_SAMPLE_RATE * duration_ms) / 1000;
         int buffers_to_play = samples_to_play / BUFFER_SIZE;
@@ -192,7 +193,7 @@ static void play_test_tone(void)
         }
         
         // Short silence between tones
-        vTaskDelay(pdMS_TO_TICKS(200));
+        //vTaskDelay(pdMS_TO_TICKS(200));
     }
     
     ESP_LOGI(TAG, "Test tone sequence completed");
@@ -243,6 +244,7 @@ static void audio_task(void *pvParameters)
             // Process samples and copy to write buffer
             for (int i = 0; i < samples; i += 2) {
                 int32_t left_sample = i2s_read_buff[i] >> 8;
+
                 int32_t right_sample = i2s_read_buff[i + 1] >> 8;
                 
                 // Store samples for display (use left channel)
